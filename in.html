@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>3D Space Shooter</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: black; }
+    canvas { display: block; }
+    #lottie-container {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 150px;
+      height: 150px;
+      pointer-events: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+
+<body>
+<audio id="shootSound" src="mixkit-short-laser-gun-shot-1670.mp3" preload="auto"></audio>
+<div id="lottie-container"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.156.1/build/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
+
+<script>
+lottie.loadAnimation({
+  container: document.getElementById('lottie-container'),
+  renderer: 'svg',
+  loop: true,
+  autoplay: true,
+  path: 'animation.jsonxRESA5Qicr.lottie'
+});
+
+let scene, camera, renderer;
+let ship, bullets = [], enemies = [], enemyBullets = [], stars = [], bgMesh;
+let explosions = [];
+let targetX = 0;
+let enemySpawnTimer = 0;
+let playerAlive = true;
+const shootSound = document.getElementById('shootSound');
+
+init();
+animate();
+
+function init() {
+  scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x000000, 5, 15);
+
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.z = 6;
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.toneMapping = THREE.ReinhardToneMapping;
+  renderer.toneMappingExposure = 1.8;
+  document.body.appendChild(renderer.domElement);
+
+  const ambient = new THREE.AmbientLight(0x888888);
+  scene.add(ambient);
+
+  const pointLight = new THREE.PointLight(0xffffff, 2.5, 50);
+  pointLight.position.set(0, 4, 5);
+  scene.add(pointLight);
+
+  const loader = new THREE.TextureLoader();
+  loader.load('20241219.jpg', function(texture) {
+    const bgGeo = new THREE.PlaneGeometry(30, 20);
+    const bgMat = new THREE.MeshBasicMaterial({ map: texture, depthWrite: false });
+    bgMesh = new THREE.Mesh(bgGeo, bgMat);
+    bgMesh.position.z = -10;
+    scene.add(bgMesh);
+  });
+
+  const shipGeo = new THREE.TorusGeometry(0.3, 0.1, 16, 100);
+  const shipMat = new THREE.MeshStandardMaterial({
+    color: 0x00ffff,
+    metalness: 0.2,
+    roughness: 0.1,
+    emissive: 0x00ffff,
+    emissiveIntensity: 1.5
+  });
+  ship = new THREE.Mesh(shipGeo, shipMat);
+  ship.rotation.x = Math.PI;
+  ship.position.y = -2.5;
+  scene.add(ship);
+
+  for (let i = 0; i < 300; i++) {
+    const starGeo = new THREE.SphereGeometry(0.01, 4, 4);
+    const starMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const star = new THREE.Mesh(starGeo, starMat);
+    star.position.set((Math.random() - 0.5) * 20, Math.random() * 20 - 10, Math.random() * -10);
+    stars.push(star);
+    scene.add(star);
+  }
+
+  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keyup', onKeyUp);
+  window.addEventListener('resize', onWindowResize);
+}
+
+function onKeyDown(e) {
+  if (!playerAlive) return;
+  if (e.code === 'ArrowLeft') targetX = ship.position.x - 0.5;
+  if (e.code === 'ArrowRight') targetX = ship.position.x + 0.5;
+  if (e.code === 'Space') shoot();
+}
+
+function onKeyUp(e) {
+  if (!playerAlive) return;
+  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') targetX = ship.position.x;
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function shoot() {
+  shootSound.currentTime = 0;
+  shootSound.play();
+
+  const bulletGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.4, 8);
+  const bulletMat = new THREE.MeshStandardMaterial({
+    color: 0xffff00,
+    emissive: 0xffff00,
+    emissiveIntensity: 1.2
+  });
+  const bullet = new THREE.Mesh(bulletGeo, bulletMat);
+  bullet.rotation.z = Math.PI / 2;
+  bullet.position.set(ship.position.x, ship.position.y + 0.5, 0);
+  bullets.push(bullet);
+  scene.add(bullet);
+}
+
+function spawnEnemy() {
+  const geo = new THREE.SphereGeometry(0.25, 16, 16);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xff6699,
+    metalness: 0.5,
+    roughness: 0.1,
+    emissive: 0xff3366,
+    emissiveIntensity: 1.2
+  });
+  const enemy = new THREE.Mesh(geo, mat);
+  enemy.position.set((Math.random() - 0.5) * 6, Math.random() * 2 + 4, 0);
+  enemy.shootCooldown = Math.random() * 1.5 + 0.5;
+  enemy.timeSinceLastShot = 0;
+  enemies.push(enemy);
+  scene.add(enemy);
+}
+
+function enemyShoot(enemy) {
+  const geo = new THREE.CylinderGeometry(0.03, 0.03, 0.4, 8);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xff0000,
+    emissive: 0xff0000,
+    emissiveIntensity: 1.2
+  });
+  const bullet = new THREE.Mesh(geo, mat);
+  bullet.rotation.z = Math.PI / 2;
+  bullet.position.set(enemy.position.x, enemy.position.y - 0.3, 0);
+  enemyBullets.push(bullet);
+  scene.add(bullet);
+}
+
+function animateEnemyColors(enemy, time) {
+  const color1 = new THREE.Color(0xff6699);
+  const color2 = new THREE.Color(0x9933ff);
+  const t = (Math.sin(time * 2) + 1) / 2;
+  enemy.material.color.copy(color1.clone().lerp(color2, t));
+  enemy.material.emissive.copy(color1.clone().lerp(color2, t));
+}
+
+function createExplosion(position) {
+  const count = 20;
+  const geometry = new THREE.BufferGeometry();
+  const positions = [];
+
+  for (let i = 0; i < count; i++) {
+    const dx = (Math.random() - 0.5) * 0.6;
+    const dy = (Math.random() - 0.5) * 0.6;
+    const dz = (Math.random() - 0.5) * 0.6;
+    positions.push(dx, dy, dz);
+  }
+
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const material = new THREE.PointsMaterial({ color: 0xffcc00, size: 0.1 });
+  const particles = new THREE.Points(geometry, material);
+
+  particles.position.copy(position);
+  scene.add(particles);
+
+  explosions.push({ mesh: particles, time: 0 });
+}
+
+function animateExplosions(delta) {
+  for (let i = explosions.length - 1; i >= 0; i--) {
+    const explosion = explosions[i];
+    explosion.time += delta;
+    explosion.mesh.material.opacity = 1.0 - explosion.time;
+    explosion.mesh.scale.multiplyScalar(1.05);
+    if (explosion.time > 1.0) {
+      scene.remove(explosion.mesh);
+      explosions.splice(i, 1);
+    }
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const delta = 0.016;
+
+  if (playerAlive) {
+    ship.position.x += (targetX - ship.position.x) * 0.08;
+    ship.rotation.z += 0.01;
+
+    enemies.forEach((e) => {
+      e.position.y -= 0.015;
+      e.rotation.x += 0.01;
+      e.rotation.y += 0.01;
+    });
+  }
+
+  stars.forEach(star => {
+    star.position.y -= 0.02;
+    if (star.position.y < -10) star.position.y = 10;
+  });
+
+  bullets.forEach((b, i) => {
+    b.position.y += 0.3;
+    if (b.position.y > 10) {
+      scene.remove(b);
+      bullets.splice(i, 1);
+    }
+  });
+
+  enemies.forEach((e, i) => {
+    e.position.y -= 0.015;
+    e.rotation.x += 0.01;
+    e.rotation.y += 0.01;
+    animateEnemyColors(e, performance.now() * 0.001);
+
+    if (e.position.y < -5) {
+      scene.remove(e);
+      enemies.splice(i, 1);
+      return;
+    }
+
+    bullets.forEach((b, j) => {
+      if (e.position.distanceTo(b.position) < 0.3) {
+        scene.remove(e);
+        scene.remove(b);
+        createExplosion(e.position);
+        enemies.splice(i, 1);
+        bullets.splice(j, 1);
+      }
+    });
+
+    e.timeSinceLastShot += delta;
+    if (e.timeSinceLastShot >= e.shootCooldown) {
+      enemyShoot(e);
+      e.timeSinceLastShot = 0;
+    }
+  });
+
+  enemyBullets.forEach((b, i) => {
+    b.position.y -= 0.15;
+    if (b.position.y < -10) {
+      scene.remove(b);
+      enemyBullets.splice(i, 1);
+    } else if (b.position.distanceTo(ship.position) < 0.3 && playerAlive) {
+      scene.remove(b);
+      enemyBullets.splice(i, 1);
+      playerAlive = false;
+      ship.material.color.set(0xff0000);
+      alert("💥 Game Over!");
+      setTimeout(() => {
+        location.reload();
+      }, 2000);
+    }
+  });
+
+  enemySpawnTimer += delta;
+  if (enemySpawnTimer >= 1.2 && playerAlive) {
+    spawnEnemy();
+    enemySpawnTimer = 0;
+  }
+
+  animateExplosions(delta);
+  renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
